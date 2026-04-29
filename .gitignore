@@ -1,0 +1,11 @@
+backend/.venv/
+backend/db.sqlite3
+backend/tmp_test_smoke.db
+backend/staticfiles/
+backend/ledger/migrations/*.py
+!backend/ledger/migrations/__init__.py
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+*.py[cod]
+.env.local

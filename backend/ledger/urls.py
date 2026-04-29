@@ -1,7 +1,9 @@
 from django.urls import path
 
-from .views import health_check
+from .views import MerchantDashboardView, PayoutCreateView, PayoutDetailView
 
 urlpatterns = [
-    path('health/', health_check, name='health-check'),
+    path('merchants/<uuid:merchant_id>/dashboard/', MerchantDashboardView.as_view()),
+    path('merchants/<uuid:merchant_id>/payouts/', PayoutCreateView.as_view()),
+    path('merchants/<uuid:merchant_id>/payouts/<uuid:payout_id>/', PayoutDetailView.as_view()),
 ]

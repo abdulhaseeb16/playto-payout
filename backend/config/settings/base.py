@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import quote
 
 import dj_database_url
 from decouple import config
@@ -54,8 +55,19 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
+DATABASE_URL = config(
+    'DATABASE_URL',
+    default=(
+        f"postgres://{config('DATABASE_USERNAME', default='postgres')}:"
+        f"{quote(config('DATABASE_PASSWORD', default='password'))}@"
+        f"{config('DATABASE_HOSTNAME', default='localhost')}:"
+        f"{config('DATABASE_PORT', default='5432')}/"
+        f"{config('DATABASE_NAME', default='playto')}"
+    ),
+)
+
 DATABASES = {
-    'default': dj_database_url.config(default=config('DATABASE_URL'))
+    'default': dj_database_url.config(default=DATABASE_URL)
 }
 
 AUTH_PASSWORD_VALIDATORS = [
