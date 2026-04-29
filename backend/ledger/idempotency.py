@@ -1,7 +1,40 @@
-import hashlib
-import json
+import hashlib, json
+from datetime import timedelta
+from django.db import transaction, IntegrityError
+from django.utils import timezone
+from .models import IdempotencyKey
 
+IDEMPOTENCY_TTL_HOURS = 24
 
-def get_request_hash(body):
+def get_request_hash(body: dict) -> str:
     canonical = json.dumps(body, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+def get_or_create_idempotency_key(merchant, key: str, request_hash: str):
+    """
+    Returns (idem_key_instance, is_new: bool).
+
+    Uses get_or_create inside a transaction. If two concurrent NEW requests
+    arrive for the same key simultaneously, only one INSERT will win.
+    The loser catches IntegrityError and fetches the winner's row.
+    This is the database-level guard against duplicate processing.
+    """
+    expires_at = timezone.now() + timedelta(hours=IDEMPOTENCY_TTL_HOURS)
+    try:
+        with transaction.atomic():
+            obj, created = IdempotencyKey.objects.get_or_create(
+                merchant=merchant,
+                key=key,
+                defaults={
+                    'request_hash': request_hash,
+                    'response_body': {},
+                    'response_status': 0,   # 0 = placeholder, request in-flight
+                    'expires_at': expires_at,
+                }
+            )
+            return obj, created
+    except IntegrityError:
+        # Race: two threads both tried to INSERT the same new key simultaneously.
+        # The loser fetches the winner's row instead.
+        obj = IdempotencyKey.objects.get(merchant=merchant, key=key)
+        return obj, False
