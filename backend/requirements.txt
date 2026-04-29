@@ -1,0 +1,11 @@
+django
+djangorestframework
+psycopg2-binary
+celery
+redis
+django-celery-results
+python-decouple
+dj-database-url
+gunicorn
+whitenoise
+django-cors-headers
