@@ -10,8 +10,8 @@ class InvalidTransitionError(Exception):
 LEGAL_TRANSITIONS = {
     Payout.PENDING: [Payout.PROCESSING],
     Payout.PROCESSING: [Payout.COMPLETED, Payout.FAILED],
-    Payout.COMPLETED: [],    # terminal — empty list blocks ALL exits
-    Payout.FAILED: [],       # terminal — empty list blocks failed→completed
+    Payout.COMPLETED: [],    # terminal; empty list blocks all exits
+    Payout.FAILED: [],       # terminal; empty list blocks failed -> completed
 }
 
 
@@ -21,8 +21,8 @@ class PayoutStateMachine:
     def validate_transition(current_status: str, new_status: str):
         """
         Raises InvalidTransitionError if the transition is illegal.
-        FAILED maps to [] so failed→completed raises here.
-        COMPLETED maps to [] so completed→anything raises here.
+        FAILED maps to [] so failed -> completed raises here.
+        COMPLETED maps to [] so completed -> anything raises here.
         """
         allowed = LEGAL_TRANSITIONS.get(current_status, [])
         if new_status not in allowed:
@@ -36,11 +36,12 @@ class PayoutStateMachine:
         """
         Atomically transitions a payout status.
 
-        On FAILED: creates a credit LedgerEntry to return funds in the SAME
+        On FAILED: creates a credit LedgerEntry to release the hold in the SAME
         transaction. If anything fails mid-way, both the status change and
-        the credit are rolled back together — merchant never gets a partial state.
+        the credit are rolled back together; merchant never gets a partial state.
 
-        On COMPLETED: creates a debit LedgerEntry to record the final settlement.
+        On COMPLETED: only records the terminal status. The debit was already
+        written when the payout was created and the funds were reserved.
 
         Uses select_for_update() to lock the payout row and prevent
         concurrent transitions on the same payout.
@@ -58,27 +59,11 @@ class PayoutStateMachine:
 
             if new_status == Payout.FAILED:
                 payout.failure_reason = failure_reason
-                existing_debit = LedgerEntry.objects.filter(
-                    reference_id=payout.id,
-                    entry_type=LedgerEntry.DEBIT,
-                ).exists()
-                if existing_debit:
-                    # Return funds atomically — same transaction as status change
-                    LedgerEntry.objects.create(
-                        merchant=payout.merchant,
-                        entry_type=LedgerEntry.CREDIT,
-                        amount_paise=payout.amount_paise,
-                        description=f"Refund for failed payout {payout.id}: {failure_reason}",
-                        reference_id=payout.id,
-                    )
-
-            if new_status == Payout.COMPLETED:
-                # Record the final debit
                 LedgerEntry.objects.create(
                     merchant=payout.merchant,
-                    entry_type=LedgerEntry.DEBIT,
+                    entry_type=LedgerEntry.CREDIT,
                     amount_paise=payout.amount_paise,
-                    description=f"Payout to {payout.bank_account.account_number[-4:]}",
+                    description=f"Refund for failed payout {payout.id}: {failure_reason}",
                     reference_id=payout.id,
                 )
 

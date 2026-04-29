@@ -1,16 +1,19 @@
-import uuid
 import json
-from datetime import timedelta
-from django.db import transaction, IntegrityError
-from django.db.models import Sum, Q
-from django.utils import timezone
+import logging
+import uuid
+
+from django.db import transaction
+from django.db.models import Q, Sum
 from rest_framework import status
-from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Merchant, Payout, LedgerEntry, BankAccount, IdempotencyKey
+from rest_framework.views import APIView
+
+from .idempotency import prepare_idempotency_record, store_idempotency_response
+from .models import BankAccount, LedgerEntry, Merchant, Payout
 from .serializers import MerchantDashboardSerializer, PayoutSerializer
-from .state_machine import PayoutStateMachine, InvalidTransitionError
 from .tasks import process_payout
+
+logger = logging.getLogger(__name__)
 
 
 class InsufficientFundsError(Exception):
@@ -19,6 +22,29 @@ class InsufficientFundsError(Exception):
 
 def make_json_safe(data):
     return json.loads(json.dumps(data, default=str))
+
+
+class APIIndexView(APIView):
+    def get(self, request):
+        merchants = Merchant.objects.order_by('name')
+        return Response({
+            'name': 'Playto Payout API',
+            'version': 'v1',
+            'endpoints': {
+                'merchant_dashboard': '/api/v1/merchants/<merchant_id>/dashboard/',
+                'create_payout_flat': '/api/v1/payouts/',
+                'create_payout': '/api/v1/merchants/<merchant_id>/payouts/',
+                'payout_detail': '/api/v1/merchants/<merchant_id>/payouts/<payout_id>/',
+            },
+            'seeded_merchants': [
+                {
+                    'id': str(merchant.id),
+                    'name': merchant.name,
+                    'dashboard': f'/api/v1/merchants/{merchant.id}/dashboard/',
+                }
+                for merchant in merchants
+            ],
+        })
 
 
 class MerchantDashboardView(APIView):
@@ -53,7 +79,7 @@ class MerchantDashboardView(APIView):
 
 
 class PayoutCreateView(APIView):
-    def post(self, request, merchant_id):
+    def post(self, request, merchant_id=None):
         idempotency_key_header = request.headers.get('Idempotency-Key')
         if not idempotency_key_header:
             return Response({'error': 'Idempotency-Key header is required'}, status=400)
@@ -62,11 +88,6 @@ class PayoutCreateView(APIView):
             uuid.UUID(idempotency_key_header)
         except ValueError:
             return Response({'error': 'Idempotency-Key must be a valid UUID'}, status=400)
-
-        try:
-            merchant = Merchant.objects.get(pk=merchant_id)
-        except Merchant.DoesNotExist:
-            return Response({'error': 'Merchant not found'}, status=404)
 
         amount_paise = request.data.get('amount_paise')
         bank_account_id = request.data.get('bank_account_id')
@@ -85,75 +106,50 @@ class PayoutCreateView(APIView):
         if not bank_account_id:
             return Response({'error': 'bank_account_id is required'}, status=400)
 
-        # Check for an existing non-expired key
-        existing_key = IdempotencyKey.objects.filter(
-            merchant=merchant,
-            key=idempotency_key_header,
-            expires_at__gt=timezone.now()
-        ).first()
+        if merchant_id is None:
+            try:
+                bank_account = BankAccount.objects.select_related('merchant').get(id=bank_account_id)
+            except (BankAccount.DoesNotExist, ValueError):
+                return Response({'error': 'Invalid bank_account_id'}, status=400)
+            merchant = bank_account.merchant
+            merchant_id = merchant.id
+        else:
+            try:
+                merchant = Merchant.objects.get(pk=merchant_id)
+            except Merchant.DoesNotExist:
+                return Response({'error': 'Merchant not found'}, status=404)
 
-        if existing_key:
-            if existing_key.response_status and existing_key.response_status != 0:
-                # We have a stored response — replay it exactly
-                return Response(existing_key.response_body, status=existing_key.response_status)
-            else:
-                # First request is still in-flight — tell caller to retry
-                return Response(
-                    {'error': 'A request with this idempotency key is already being processed.'},
-                    status=409
-                )
-
-        # Create placeholder row — unique_together (merchant, key) is the final guard
-        # If two concurrent NEW requests arrive, only one INSERT wins; loser gets IntegrityError
-        expires_at = timezone.now() + timedelta(hours=24)
-        try:
-            idem_record = IdempotencyKey.objects.create(
-                merchant=merchant,
-                key=idempotency_key_header,
-                request_hash='',
-                response_body={},
-                response_status=0,   # 0 = in-flight placeholder
-                expires_at=expires_at,
-            )
-        except IntegrityError:
-            return Response(
-                {'error': 'A request with this idempotency key is already being processed.'},
-                status=409
-            )
+        idem_record, replay_response = prepare_idempotency_record(
+            merchant,
+            idempotency_key_header,
+            {'amount_paise': amount_paise, 'bank_account_id': str(bank_account_id)},
+        )
+        if replay_response is not None:
+            return replay_response
 
         try:
             with transaction.atomic():
-                # SELECT FOR UPDATE acquires a row-level exclusive lock on this merchant.
-                # Any other transaction attempting select_for_update on the same merchant
-                # will BLOCK here until this transaction commits or rolls back.
-                # This serialises concurrent payout requests and prevents overdraw.
                 merchant_locked = Merchant.objects.select_for_update().get(pk=merchant_id)
 
-                # Compute balance INSIDE the lock at database level — never in Python
                 result = LedgerEntry.objects.filter(merchant=merchant_locked).aggregate(
                     credits=Sum('amount_paise', filter=Q(entry_type=LedgerEntry.CREDIT)),
                     debits=Sum('amount_paise', filter=Q(entry_type=LedgerEntry.DEBIT)),
                 )
                 ledger_balance = (result['credits'] or 0) - (result['debits'] or 0)
 
-                held = Payout.objects.filter(
-                    merchant=merchant_locked,
-                    status__in=[Payout.PENDING, Payout.PROCESSING]
-                ).aggregate(total=Sum('amount_paise'))['total'] or 0
-
-                available = ledger_balance - held
-
+                available = ledger_balance
                 if available < amount_paise:
                     raise InsufficientFundsError(
-                        f"Insufficient funds: {available}p available, {amount_paise}p requested"
+                        f'Insufficient funds: {available}p available, {amount_paise}p requested'
                     )
 
                 try:
                     bank_account = BankAccount.objects.get(
-                        id=bank_account_id, merchant=merchant_locked
+                        id=bank_account_id,
+                        merchant=merchant_locked,
                     )
                 except BankAccount.DoesNotExist:
-                    raise ValueError("Invalid bank_account_id")
+                    raise ValueError('Invalid bank_account_id')
 
                 payout = Payout.objects.create(
                     merchant=merchant_locked,
@@ -162,33 +158,31 @@ class PayoutCreateView(APIView):
                     idempotency_key=idempotency_key_header,
                     status=Payout.PENDING,
                 )
-
-                idem_record.payout = payout
-                idem_record.save(update_fields=['payout'])
+                LedgerEntry.objects.create(
+                    merchant=merchant_locked,
+                    entry_type=LedgerEntry.DEBIT,
+                    amount_paise=amount_paise,
+                    description=f"Payout hold: {payout.id}",
+                    reference_id=payout.id,
+                )
 
         except InsufficientFundsError as e:
             response_body = {'error': str(e)}
-            idem_record.response_body = response_body
-            idem_record.response_status = 422
-            idem_record.save(update_fields=['response_body', 'response_status'])
+            store_idempotency_response(idem_record, response_body, 422)
             return Response(response_body, status=422)
 
         except ValueError as e:
             response_body = {'error': str(e)}
-            idem_record.response_body = response_body
-            idem_record.response_status = 400
-            idem_record.save(update_fields=['response_body', 'response_status'])
+            store_idempotency_response(idem_record, response_body, 400)
             return Response(response_body, status=400)
 
         try:
             process_payout.apply_async(args=[str(payout.id)], countdown=1)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception('Failed to enqueue payout processing for payout %s: %s', payout.id, exc)
 
         response_data = make_json_safe(PayoutSerializer(payout).data)
-        idem_record.response_body = response_data
-        idem_record.response_status = 201
-        idem_record.save(update_fields=['response_body', 'response_status'])
+        store_idempotency_response(idem_record, response_data, 201, payout=payout)
 
         return Response(response_data, status=201)
 

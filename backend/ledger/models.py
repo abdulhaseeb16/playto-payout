@@ -30,7 +30,7 @@ class Merchant(models.Model):
         return result['total'] or 0
 
     def get_available_balance(self):
-        return self.get_balance() - self.get_held_balance()
+        return self.get_balance()
 
     def __str__(self):
         return self.name
@@ -45,7 +45,7 @@ class BankAccount(models.Model):
     is_primary = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.account_holder_name} — {self.account_number[-4:]}"
+        return f"{self.account_holder_name} - {self.account_number[-4:]}"
 
 
 class LedgerEntry(models.Model):
@@ -108,7 +108,7 @@ class Payout(models.Model):
         ]
 
     def __str__(self):
-        return f"Payout {self.id} — {self.status} — {self.amount_paise}p"
+        return f"Payout {self.id} - {self.status} - {self.amount_paise}p"
 
 
 class IdempotencyKey(models.Model):
