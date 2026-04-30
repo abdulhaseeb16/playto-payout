@@ -401,148 +401,500 @@ docker compose down -v
 
 Use `down -v` carefully because it deletes local PostgreSQL data.
 
-## 6. Railway Deployment
+## 6. Railway Backend Deployment
 
-Railway is a good fit because the app needs PostgreSQL, Redis, a web service, and worker services.
+Use Railway for the backend runtime: PostgreSQL, Redis, Django API, Celery worker, and Celery beat. Use Vercel only for the React frontend.
 
-### 6.1 Create Resources
+Official references:
 
-1. Create a Railway project.
-2. Add a PostgreSQL service.
-3. Add a Redis service.
-4. Copy the generated `DATABASE_URL`.
-5. Copy the generated `REDIS_URL`.
+- Railway Django guide: `https://docs.railway.com/guides/django`
+- Railway build/start commands: `https://docs.railway.com/reference/build-and-start-commands`
+- Railway service variables: `https://docs.railway.com/variables`
+- Railway Redis: `https://docs.railway.com/databases/redis`
 
-### 6.2 Backend API Service
+### 6.1 Push the Correct Branch to GitHub
 
-Create a backend service from the repository with root directory:
+Use the production-ready branch:
+
+```bash
+git switch production-readiness
+git status
+git push -u origin production-readiness
+```
+
+If you want Railway to deploy from `main`, merge the branch first:
+
+```bash
+git switch main
+git merge production-readiness
+git push origin main
+```
+
+Recommended for first deployment: deploy `production-readiness`, verify everything, then merge into `main`.
+
+### 6.2 Create the Railway Project
+
+1. Open Railway.
+2. Click `New Project`.
+3. Choose `Deploy from GitHub repo`.
+4. Select:
+
+   ```text
+   abdulhaseeb16/playto-payout
+   ```
+
+5. Choose the branch:
+
+   ```text
+   production-readiness
+   ```
+
+6. Railway may create an initial service. If it points at the repo root, keep it but configure it as the backend API in the next step.
+
+### 6.3 Configure the Backend API Service
+
+Open the Railway service settings for the backend API.
+
+Set the root directory:
 
 ```text
 playto-payout/backend
 ```
 
-Set environment variables:
+Set the start command:
+
+```bash
+python manage.py collectstatic --noinput && python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+```
+
+Why this command:
+
+- `collectstatic` prepares Django static files for WhiteNoise.
+- `migrate` applies schema changes on deploy.
+- `gunicorn` runs Django in production.
+
+If Railway complains about variable expansion with `$PORT`, use the shell-wrapped form:
+
+```bash
+sh -c "python manage.py collectstatic --noinput && python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT"
+```
+
+### 6.4 Add PostgreSQL on Railway
+
+1. In the Railway project canvas, click `New`.
+2. Choose `Database`.
+3. Choose `PostgreSQL`.
+4. Wait for the database service to finish provisioning.
+5. Open the PostgreSQL service.
+6. Go to `Variables`.
+7. Confirm Railway exposes a PostgreSQL connection URL.
+
+Use that value as the backend service `DATABASE_URL`.
+
+Typical value:
 
 ```env
-DEBUG=False
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+```
+
+The exact service name may differ. Use Railway's variable picker to reference the PostgreSQL service instead of typing credentials manually.
+
+### 6.5 Add Redis on Railway
+
+1. In the Railway project canvas, click `New`.
+2. Choose `Database` or search for `Redis`.
+3. Add the Redis template/service.
+4. Wait for Redis to finish provisioning.
+5. Open the Redis service.
+6. Go to `Variables`.
+7. Confirm Railway exposes:
+
+   ```text
+   REDIS_URL
+   ```
+
+Use that value as the backend service `REDIS_URL`.
+
+Typical value:
+
+```env
+REDIS_URL=${{Redis.REDIS_URL}}
+```
+
+Again, use Railway's variable picker if the service name is different.
+
+### 6.6 Add Backend API Environment Variables
+
+Open the backend API service, go to `Variables`, and add:
+
+```env
 DJANGO_SETTINGS_MODULE=config.settings.production
-SECRET_KEY=<strong-random-secret>
-DATABASE_URL=<railway-postgres-url>
-REDIS_URL=<railway-redis-url>
-ALLOWED_HOSTS=<railway-backend-domain>
-CORS_ALLOWED_ORIGINS=https://<frontend-domain>
-CSRF_TRUSTED_ORIGINS=https://<frontend-domain>
+DEBUG=False
+SECRET_KEY=<generate-a-long-random-secret>
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+REDIS_URL=${{Redis.REDIS_URL}}
+ALLOWED_HOSTS=<temporary-backend-domain>
+CORS_ALLOWED_ORIGINS=<temporary-frontend-origin>
+CSRF_TRUSTED_ORIGINS=<temporary-frontend-origin>
 SECURE_SSL_REDIRECT=True
 ```
 
-Build uses the `backend/Dockerfile`.
+At this point, you may not have the final Railway or Vercel domains yet. Use placeholders, deploy once, generate the domains, then come back and replace them.
 
-Start command:
-
-```bash
-gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
-```
-
-After the first successful deploy, run:
+Generate a strong secret locally:
 
 ```bash
-python manage.py migrate
+python -c "import secrets; print(secrets.token_urlsafe(50))"
 ```
 
-For a demo deployment only, run:
+Do not commit the generated value.
+
+### 6.7 Deploy the Backend API Once
+
+1. Click `Deploy` or let Railway deploy after variables are saved.
+2. Open deployment logs.
+3. Confirm these steps complete:
+
+   ```text
+   collectstatic
+   migrate
+   gunicorn listening
+   ```
+
+4. Open service `Settings`.
+5. Go to `Networking`.
+6. Click `Generate Domain`.
+7. Copy the backend URL.
+
+Example:
+
+```text
+https://playto-payout-api.up.railway.app
+```
+
+Now update backend API variables:
+
+```env
+ALLOWED_HOSTS=playto-payout-api.up.railway.app
+```
+
+If you do not have the Vercel frontend URL yet, leave CORS/CSRF temporary and update it after Vercel deployment.
+
+Redeploy the backend after changing variables.
+
+### 6.8 Verify the Backend API
+
+Open:
+
+```text
+https://<railway-backend-domain>/healthz/
+```
+
+Expected:
+
+```json
+{"status": "ok"}
+```
+
+Open:
+
+```text
+https://<railway-backend-domain>/api/v1/
+```
+
+Expected:
+
+- JSON response
+- `name` is `Playto Payout API`
+- `endpoints` are listed
+
+If this fails with `DisallowedHost`, fix `ALLOWED_HOSTS`.
+
+If this redirects too much, temporarily set:
+
+```env
+SECURE_SSL_REDIRECT=False
+```
+
+Then redeploy and inspect Railway proxy headers.
+
+### 6.9 Create the Celery Worker Service
+
+In Railway:
+
+1. Click `New`.
+2. Choose `GitHub repo`.
+3. Select the same repo and branch.
+4. Name the service:
+
+   ```text
+   celery-worker
+   ```
+
+5. Set root directory:
+
+   ```text
+   playto-payout/backend
+   ```
+
+6. Set start command:
+
+   ```bash
+   celery -A config worker --loglevel=info --concurrency=4
+   ```
+
+7. Add the same variables as the backend API:
+
+   ```env
+   DJANGO_SETTINGS_MODULE=config.settings.production
+   DEBUG=False
+   SECRET_KEY=<same-secret-as-api>
+   DATABASE_URL=${{Postgres.DATABASE_URL}}
+   REDIS_URL=${{Redis.REDIS_URL}}
+   ALLOWED_HOSTS=<railway-backend-domain>
+   CORS_ALLOWED_ORIGINS=<vercel-frontend-origin>
+   CSRF_TRUSTED_ORIGINS=<vercel-frontend-origin>
+   SECURE_SSL_REDIRECT=True
+   ```
+
+8. Deploy and check logs.
+
+Expected logs include Celery booting and connecting to Redis.
+
+### 6.10 Create the Celery Beat Service
+
+In Railway:
+
+1. Click `New`.
+2. Choose `GitHub repo`.
+3. Select the same repo and branch.
+4. Name the service:
+
+   ```text
+   celery-beat
+   ```
+
+5. Set root directory:
+
+   ```text
+   playto-payout/backend
+   ```
+
+6. Set start command:
+
+   ```bash
+   celery -A config beat --loglevel=info
+   ```
+
+7. Add the same variables as the backend API.
+8. Deploy and check logs.
+
+Run exactly one Celery beat service. More than one scheduler can enqueue duplicate periodic jobs.
+
+### 6.11 Optional: Seed Demo Data on Railway
+
+Only do this for a demo or assessment deployment.
+
+In the backend API service shell or Railway command runner, run:
 
 ```bash
 python manage.py shell < seed.py
 ```
 
-### 6.3 Celery Worker Service
+Do not run this against real production data. The seed script resets demo tables.
 
-Create another service from the same backend folder.
-
-Use the same backend environment variables.
-
-Start command:
-
-```bash
-celery -A config worker --loglevel=info --concurrency=4
-```
-
-### 6.4 Celery Beat Service
-
-Create a third service from the same backend folder.
-
-Use the same backend environment variables.
-
-Start command:
-
-```bash
-celery -A config beat --loglevel=info
-```
-
-Only run one Celery beat instance. Multiple beat instances can enqueue duplicate periodic tasks.
-
-### 6.5 Frontend Service
-
-Deploy the frontend separately with root directory:
+After seeding, open:
 
 ```text
-playto-payout/frontend
+https://<railway-backend-domain>/api/v1/
 ```
 
-Set:
+`seeded_merchants` should contain demo merchants.
+
+## 7. Vercel Frontend Deployment
+
+Use Vercel for the React/Vite frontend only.
+
+Official references:
+
+- Vercel Vite guide: `https://vercel.com/docs/frameworks/frontend/vite`
+- Vercel build settings: `https://vercel.com/docs/deployments/configure-a-build`
+- Vercel environment variables: `https://vercel.com/docs/environment-variables`
+- Vercel CLI deploy: `https://vercel.com/docs/cli/deploy`
+
+### 7.1 Import the GitHub Repository
+
+1. Open Vercel.
+2. Click `Add New`.
+3. Choose `Project`.
+4. Import:
+
+   ```text
+   abdulhaseeb16/playto-payout
+   ```
+
+5. If Vercel asks which branch to deploy, choose:
+
+   ```text
+   production-readiness
+   ```
+
+   Or choose `main` if you already merged production changes into `main`.
+
+### 7.2 Configure Vercel Project Settings
+
+Set these values during import:
+
+```text
+Framework Preset: Vite
+Root Directory: playto-payout/frontend
+Install Command: npm ci
+Build Command: npm run build
+Output Directory: dist
+```
+
+Vercel usually detects Vite automatically, but set these explicitly because this repository is nested under `playto-payout/frontend`.
+
+### 7.3 Add Vercel Environment Variables
+
+In Vercel project settings, add this variable for `Production` and `Preview`:
 
 ```env
 VITE_API_URL=https://<railway-backend-domain>/api/v1
 ```
 
-Build command:
+Example:
+
+```env
+VITE_API_URL=https://playto-payout-api.up.railway.app/api/v1
+```
+
+Vite only exposes variables prefixed with `VITE_`, and Vercel injects them during the build. If this value changes, redeploy the frontend.
+
+### 7.4 Deploy the Frontend
+
+Click `Deploy`.
+
+Expected build flow:
+
+```text
+npm ci
+npm run build
+dist uploaded to Vercel
+```
+
+After deploy, copy the Vercel production URL.
+
+Example:
+
+```text
+https://playto-payout.vercel.app
+```
+
+### 7.5 Update Railway CORS and CSRF for Vercel
+
+Go back to Railway backend API service variables.
+
+Set:
+
+```env
+CORS_ALLOWED_ORIGINS=https://<vercel-frontend-domain>
+CSRF_TRUSTED_ORIGINS=https://<vercel-frontend-domain>
+```
+
+Example:
+
+```env
+CORS_ALLOWED_ORIGINS=https://playto-payout.vercel.app
+CSRF_TRUSTED_ORIGINS=https://playto-payout.vercel.app
+```
+
+If you also want Vercel preview deployments to work, add their exact preview origin too:
+
+```env
+CORS_ALLOWED_ORIGINS=https://playto-payout.vercel.app,https://playto-payout-git-production-readiness-<team>.vercel.app
+CSRF_TRUSTED_ORIGINS=https://playto-payout.vercel.app,https://playto-payout-git-production-readiness-<team>.vercel.app
+```
+
+Do not include trailing slashes.
+
+Redeploy the Railway backend API after changing variables.
+
+### 7.6 Verify the Vercel Frontend
+
+Open:
+
+```text
+https://<vercel-frontend-domain>
+```
+
+Confirm:
+
+- The dashboard loads.
+- The merchant dropdown appears.
+- Balance cards load from Railway.
+- Payout history loads.
+- Ledger history loads.
+- Creating a small payout works in a demo environment.
+
+If the dashboard does not load:
+
+1. Open browser dev tools.
+2. Check the Network tab for the API URL.
+3. Confirm it points to:
+
+   ```text
+   https://<railway-backend-domain>/api/v1
+   ```
+
+4. If it points to `localhost`, fix `VITE_API_URL` in Vercel and redeploy.
+5. If it shows a CORS error, fix Railway `CORS_ALLOWED_ORIGINS` and redeploy the backend.
+
+### 7.7 Vercel CLI Alternative
+
+From the repo root:
 
 ```bash
-npm ci && npm run build
+npm install -g vercel
+vercel --cwd playto-payout/frontend
 ```
 
-Output directory:
+For production:
+
+```bash
+vercel --cwd playto-payout/frontend --prod
+```
+
+If deploying with CLI, make sure `VITE_API_URL` is configured in Vercel project settings or pass it as a build env:
+
+```bash
+vercel --cwd playto-payout/frontend --prod --build-env VITE_API_URL=https://<railway-backend-domain>/api/v1
+```
+
+### 7.8 Final Railway + Vercel Verification
+
+Check backend:
 
 ```text
-dist
+https://<railway-backend-domain>/healthz/
+https://<railway-backend-domain>/api/v1/
 ```
 
-After the frontend domain is created, update the backend API service:
-
-```env
-CORS_ALLOWED_ORIGINS=https://<frontend-domain>
-```
-
-Redeploy the backend after changing CORS.
-
-## 7. Vercel Frontend Deployment
-
-Vercel is a clean option for the React frontend.
-
-Project settings:
+Check frontend:
 
 ```text
-Framework preset: Vite
-Root directory: playto-payout/frontend
-Build command: npm run build
-Output directory: dist
-Install command: npm ci
+https://<vercel-frontend-domain>
 ```
 
-Environment variable:
+Check Celery:
 
-```env
-VITE_API_URL=https://<backend-domain>/api/v1
-```
+1. Create a payout from the frontend.
+2. Open Railway logs for `celery-worker`.
+3. Confirm `process_payout` tasks run.
+4. Open Railway logs for `celery-beat`.
+5. Confirm periodic tasks are being scheduled.
 
-After Vercel gives you a frontend URL, add it to the backend:
-
-```env
-CORS_ALLOWED_ORIGINS=https://<your-vercel-app>.vercel.app
-CSRF_TRUSTED_ORIGINS=https://<your-vercel-app>.vercel.app
-```
-
-Then redeploy the backend.
+Deployment is complete when the frontend can create payouts and the worker processes them.
 
 ## 8. Render Deployment
 

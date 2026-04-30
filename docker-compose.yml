@@ -18,8 +18,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -60,7 +58,10 @@ services:
       SECRET_KEY: change-me-for-production
       SECURE_SSL_REDIRECT: "False"
     depends_on:
-      - backend
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   celery_beat:
     build: ./backend
@@ -72,7 +73,10 @@ services:
       SECRET_KEY: change-me-for-production
       SECURE_SSL_REDIRECT: "False"
     depends_on:
-      - backend
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   frontend:
     build:
@@ -84,3 +88,7 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  default:
+    name: playto-network

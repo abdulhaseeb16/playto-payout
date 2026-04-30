@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+// Use relative path - nginx proxies /api/ to backend
+const BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 const api = axios.create({ baseURL: BASE_URL });
 
 export const getApiIndex = () => api.get('/');

@@ -139,17 +139,19 @@ REST_FRAMEWORK = {
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:5173',
-)
-CORS_ALLOWED_ORIGINS = config_csv('CORS_ALLOWED_ORIGINS', default=CORS_ALLOWED_ORIGINS)
+).split(',')
+
+# Allow all origins for development (nginx serves frontend and backend on same domain)
+CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'idempotency-key',
 ]
 
-CSRF_TRUSTED_ORIGINS = config_csv(
+CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
     default=','.join(CORS_ALLOWED_ORIGINS),
-)
+).split(',')
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = config_bool('SECURE_SSL_REDIRECT', default=False)
