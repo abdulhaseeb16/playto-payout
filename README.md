@@ -121,24 +121,36 @@ Services:
 - Celery beat
 - Frontend on `80`
 
-## Deployment Notes
+## Production Deployment
 
-For Railway-style deployment:
+### Backend (Railway)
 
-1. Provision PostgreSQL and Redis.
-2. Set `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `ALLOWED_HOSTS`, and `CORS_ALLOWED_ORIGINS`.
-3. Deploy backend with:
+1. Deploy to Railway with PostgreSQL and Redis
+2. Set environment variables:
+   - `DATABASE_URL` (from Railway Postgres)
+   - `REDIS_URL` (from Railway Redis)
+   - `SECRET_KEY` (generate secure random key)
+   - `DEBUG=False`
+   - `CORS_ALLOWED_ORIGINS=https://your-frontend.vercel.app`
 
-   ```bash
-   gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
-   ```
-
-4. Run once:
-
+3. Run migrations:
    ```bash
    python manage.py migrate
    python manage.py shell < seed.py
    ```
 
-5. Deploy separate Celery worker and beat services.
-6. Deploy the frontend with `VITE_API_URL` pointing to the backend `/api/v1` URL.
+4. Celery worker + beat combined: `bash start-celery.sh`
+
+### Frontend (Vercel)
+
+1. Deploy `frontend` directory to Vercel
+2. Set environment variable:
+   - `VITE_API_URL=https://your-backend.railway.app/api/v1`
+
+### Quick Local Testing
+
+```bash
+docker compose up --build
+```
+
+Then open http://localhost
