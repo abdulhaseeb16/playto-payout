@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 const api = axios.create({ baseURL: BASE_URL });
 
+export const getApiIndex = () => api.get('/');
+
 export const getDashboard = (merchantId) =>
   api.get(`/merchants/${merchantId}/dashboard/`);
 
