@@ -25,6 +25,10 @@ def config_csv(name, default=''):
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
+def config_origin_csv(name, default=''):
+    return [origin.rstrip('/') for origin in config_csv(name, default=default)]
+
+
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config_bool('DEBUG', default=False)
 ALLOWED_HOSTS = config_csv('ALLOWED_HOSTS', default='localhost,127.0.0.1')
@@ -136,10 +140,10 @@ REST_FRAMEWORK = {
     'DEFAULT_PARSER_CLASSES': ['rest_framework.parsers.JSONParser'],
 }
 
-CORS_ALLOWED_ORIGINS = config(
+CORS_ALLOWED_ORIGINS = config_origin_csv(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:5173',
-).split(',')
+)
 
 # Allow all origins for development (nginx serves frontend and backend on same domain)
 CORS_ALLOW_ALL_ORIGINS = True
@@ -148,10 +152,10 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     'idempotency-key',
 ]
 
-CSRF_TRUSTED_ORIGINS = config(
+CSRF_TRUSTED_ORIGINS = config_origin_csv(
     'CSRF_TRUSTED_ORIGINS',
     default=','.join(CORS_ALLOWED_ORIGINS),
-).split(',')
+)
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 SECURE_SSL_REDIRECT = config_bool('SECURE_SSL_REDIRECT', default=False)
