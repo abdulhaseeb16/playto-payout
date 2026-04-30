@@ -49,6 +49,17 @@ def process_payout(self, payout_id: str):
 
 
 @shared_task
+def process_pending_payouts(limit: int = 50):
+    pending_ids = list(
+        Payout.objects.filter(status=Payout.PENDING)
+        .order_by('created_at')
+        .values_list('id', flat=True)[:limit]
+    )
+    for payout_id in pending_ids:
+        process_payout.apply_async(args=[str(payout_id)])
+
+
+@shared_task
 def retry_stuck_payouts():
     timeout_threshold = timezone.now() - timedelta(seconds=PROCESSING_TIMEOUT_SECONDS)
 
@@ -56,7 +67,7 @@ def retry_stuck_payouts():
         status=Payout.PROCESSING,
         processing_started_at__lt=timeout_threshold,
     ).select_for_update(skip_locked=True)
-    # skip_locked=True: skip rows already locked by another worker — prevents double-retry
+    # skip_locked=True skips rows already locked by another worker and prevents double-retry.
 
     with transaction.atomic():
         for payout in stuck_payouts:
@@ -69,7 +80,7 @@ def retry_stuck_payouts():
             else:
                 # Exponential backoff: 2^attempt_count seconds (4s, 8s, 16s)
                 backoff = 2 ** payout.attempt_count
-                # Direct update bypasses the state machine guard — this is the only legitimate exception,
+                # Direct update bypasses the state machine guard. This is the only legitimate exception,
                 # used by the recovery task to reset a stuck PROCESSING payout back to PENDING for retry.
                 Payout.objects.filter(pk=payout.id).update(status=Payout.PENDING)
                 process_payout.apply_async(args=[str(payout.id)], countdown=backoff)

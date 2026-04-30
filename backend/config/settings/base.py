@@ -3,11 +3,25 @@ from urllib.parse import quote
 
 import dj_database_url
 from decouple import config
+from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+
+def config_bool(name, default=False):
+    value = config(name, default=default)
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'true', 't', 'yes', 'y', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'f', 'no', 'n', 'off', 'production', 'release'}:
+        return False
+    raise ValueError(f'{name} must be a boolean value')
+
+
 SECRET_KEY = config('SECRET_KEY')
-DEBUG = config('DEBUG', default=False, cast=bool)
+DEBUG = config_bool('DEBUG', default=False)
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1').split(',')
 
 INSTALLED_APPS = [
@@ -55,16 +69,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-DATABASE_URL = config(
-    'DATABASE_URL',
-    default=(
+DATABASE_URL = config('DATABASE_URL', default='')
+if not DATABASE_URL:
+    DATABASE_URL = (
         f"postgres://{config('DATABASE_USERNAME', default='postgres')}:"
         f"{quote(config('DATABASE_PASSWORD', default='password'))}@"
         f"{config('DATABASE_HOSTNAME', default='localhost')}:"
         f"{config('DATABASE_PORT', default='5432')}/"
         f"{config('DATABASE_NAME', default='playto')}"
-    ),
-)
+    )
 
 DATABASES = {
     'default': dj_database_url.config(default=DATABASE_URL)
@@ -103,6 +116,10 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TIMEZONE = 'UTC'
 
 CELERY_BEAT_SCHEDULE = {
+    'process-pending-payouts': {
+        'task': 'ledger.tasks.process_pending_payouts',
+        'schedule': 5.0,
+    },
     'retry-stuck-payouts': {
         'task': 'ledger.tasks.retry_stuck_payouts',
         'schedule': 10.0,
@@ -118,3 +135,7 @@ CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:5173',
 ).split(',')
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'idempotency-key',
+]
