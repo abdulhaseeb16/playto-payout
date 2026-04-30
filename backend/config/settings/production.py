@@ -1,3 +1,10 @@
 from .base import *
 
 DEBUG = False
+
+SECURE_SSL_REDIRECT = config_bool('SECURE_SSL_REDIRECT', default=True)
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=31536000, cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config_bool('SECURE_HSTS_INCLUDE_SUBDOMAINS', default=True)
+SECURE_HSTS_PRELOAD = config_bool('SECURE_HSTS_PRELOAD', default=True)
