@@ -5,15 +5,9 @@ import LedgerHistory from './LedgerHistory';
 import PayoutForm from './PayoutForm';
 import PayoutHistory from './PayoutHistory';
 
-const FALLBACK_MERCHANTS = [
-  { id: '11111111-1111-4111-8111-111111111111', name: 'Velocity Creative Agency' },
-  { id: '22222222-2222-4222-8222-222222222222', name: 'Priya Sharma - Freelance Dev' },
-  { id: '33333333-3333-4333-8333-333333333333', name: 'InvoiceZen SaaS' },
-];
-
 export default function Dashboard() {
-  const [merchants, setMerchants] = useState(FALLBACK_MERCHANTS);
-  const [activeMerchant, setActiveMerchant] = useState(FALLBACK_MERCHANTS[0].id);
+  const [merchants, setMerchants] = useState([]);
+  const [activeMerchant, setActiveMerchant] = useState('');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,17 +19,19 @@ export default function Dashboard() {
       try {
         const res = await getApiIndex();
         const seededMerchants = res.data.seeded_merchants || [];
-        if (mounted && seededMerchants.length > 0) {
-          setMerchants(seededMerchants);
-          setActiveMerchant((current) => (
-            seededMerchants.some((merchant) => merchant.id === current)
-              ? current
-              : seededMerchants[0].id
-          ));
+        if (!mounted) return;
+
+        setMerchants(seededMerchants);
+        if (seededMerchants.length > 0) {
+          setActiveMerchant(seededMerchants[0].id);
+        } else {
+          setError('No merchants found. Seed demo data on the backend first.');
+          setLoading(false);
         }
       } catch {
         if (mounted) {
-          setMerchants(FALLBACK_MERCHANTS);
+          setError('Failed to load API');
+          setLoading(false);
         }
       }
     }
@@ -47,6 +43,8 @@ export default function Dashboard() {
   }, []);
 
   const fetchData = useCallback(async () => {
+    if (!activeMerchant) return;
+
     try {
       const res = await getDashboard(activeMerchant);
       setData(res.data);
